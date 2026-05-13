@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - db.robert-sjoblom.dev
+  resources:
+  - postgresclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - db.robert-sjoblom.dev
+  resources:
+  - postgresclusters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - db.robert-sjoblom.dev
+  resources:
+  - postgresclusters/status
+  verbs:
+  - get
+  - patch
+  - update

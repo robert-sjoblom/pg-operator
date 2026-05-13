@@ -1,0 +1,7 @@
+apiVersion: db.robert-sjoblom.dev/v1alpha1
+kind: PostgresCluster
+metadata:
+  name: minimal-cr
+  namespace: default
+spec:
+  replicas: 2
