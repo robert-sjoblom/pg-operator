@@ -16,6 +16,7 @@ linters:
     - modernize
     - misspell
     - nakedret
+    - nilerr
     - prealloc
     - revive
     - staticcheck

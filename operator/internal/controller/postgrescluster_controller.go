@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,7 @@ type PostgresClusterReconciler struct {
 // +kubebuilder:rbac:groups=db.robert-sjoblom.dev,resources=postgresclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -64,33 +66,17 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	svc := Service(pg)
-	if err := controllerutil.SetControllerReference(pg, svc, r.Scheme); err != nil {
+	if err := r.ensure(ctx, pg, svc); err != nil {
 		return ctrl.Result{}, err
 	}
-
-	existingSvc := &corev1.Service{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(svc), existingSvc)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, svc); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else if err != nil {
-		return ctrl.Result{}, err
-	}
-	// at this point, Service exists -- either pre-existing, or created
 
 	secret := Secret(pg)
-	if err := controllerutil.SetControllerReference(pg, secret, r.Scheme); err != nil {
+	if err := r.ensure(ctx, pg, secret); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	existingSecret := &corev1.Secret{}
-	err = r.Get(ctx, client.ObjectKeyFromObject(secret), existingSecret)
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, secret); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else if err != nil {
+	pvc := InstancePVC(pg, 0)
+	if err := r.ensure(ctx, pg, pvc); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -99,12 +85,33 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
+func (r *PostgresClusterReconciler) ensure(ctx context.Context, pg *dbv1alpha1.PostgresCluster, obj client.Object) error {
+	if err := controllerutil.SetControllerReference(pg, obj, r.Scheme); err != nil {
+		return err
+	}
+
+	// copy the type, not the values
+	existing := reflect.New(reflect.TypeOf(obj).Elem()).Interface().(client.Object)
+
+	err := r.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, obj); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *PostgresClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dbv1alpha1.PostgresCluster{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
 		Named("postgrescluster").
 		Complete(r)
 }

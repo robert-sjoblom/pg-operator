@@ -5,6 +5,7 @@ import (
 
 	dbv1alpha1 "github.com/robert-sjoblom/pg-operator/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -36,6 +37,24 @@ func Secret(pg *dbv1alpha1.PostgresCluster) *corev1.Secret {
 			Name:      fmt.Sprintf("%s-creds", pg.Name),
 			Namespace: pg.Namespace,
 			Labels:    labelsForPg(pg),
+		},
+	}
+}
+
+func InstancePVC(pg *dbv1alpha1.PostgresCluster, idx int32) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("data-%s-%d", pg.Name, idx),
+			Namespace: pg.Namespace,
+			Labels:    labelsForPg(pg),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			},
+			StorageClassName: nil, // default StorageClass = local-path
+			VolumeMode:       nil, // defaults to FileSystem
 		},
 	}
 }
