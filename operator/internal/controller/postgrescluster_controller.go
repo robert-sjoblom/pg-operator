@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1alpha1 "github.com/robert-sjoblom/pg-operator/operator/api/v1alpha1"
@@ -37,6 +39,7 @@ type PostgresClusterReconciler struct {
 // +kubebuilder:rbac:groups=db.robert-sjoblom.dev,resources=postgresclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=db.robert-sjoblom.dev,resources=postgresclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=db.robert-sjoblom.dev,resources=postgresclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -59,6 +62,22 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	svc := Service(pg)
+	if err := controllerutil.SetControllerReference(pg, svc, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	existing := &corev1.Service{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(svc), existing)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, svc); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else if err != nil {
+		return ctrl.Result{}, err
+	}
+	// at this point, Service exists -- either pre-existing, or created
+
 	logger.Info("reconciling", "replicas", pg.Spec.Replicas)
 
 	return ctrl.Result{}, nil
@@ -68,6 +87,7 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *PostgresClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dbv1alpha1.PostgresCluster{}).
+		Owns(&corev1.Service{}).
 		Named("postgrescluster").
 		Complete(r)
 }
