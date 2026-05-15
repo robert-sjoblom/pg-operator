@@ -43,6 +43,7 @@ type PostgresClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -75,9 +76,23 @@ func (r *PostgresClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	pvc := InstancePVC(pg, 0)
-	if err := r.ensure(ctx, pg, pvc); err != nil {
-		return ctrl.Result{}, err
+	for i := 0; i <= int(pg.Spec.Replicas); i++ {
+		pvc := InstancePVC(pg, i)
+		if err := r.ensure(ctx, pg, pvc); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		var role string
+		if i == 0 {
+			role = "primary"
+		} else {
+			role = "replica"
+		}
+
+		pod := InstancePod(pg, i, role)
+		if err := r.ensure(ctx, pg, pod); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	logger.Info("reconciling", "replicas", pg.Spec.Replicas)
@@ -112,6 +127,7 @@ func (r *PostgresClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&corev1.Pod{}).
 		Named("postgrescluster").
 		Complete(r)
 }
