@@ -2,12 +2,14 @@ package controller
 
 import (
 	"fmt"
+	"strings"
 
 	dbv1alpha1 "github.com/robert-sjoblom/pg-operator/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -80,14 +82,26 @@ func InstancePod(pg *dbv1alpha1.PostgresCluster, idx int, role string) *corev1.P
 		Spec: corev1.PodSpec{
 			Hostname:  podName(pg, idx),
 			Subdomain: serviceName(pg),
-			Volumes: []corev1.Volume{{
-				Name: "data",
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: pvcName(pg, idx, "data"),
+			Volumes: []corev1.Volume{
+				{
+					Name: "data",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: pvcName(pg, idx, "data"),
+						},
 					},
 				},
-			}},
+				{
+					Name: "init-scripts",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: configMapName(pg),
+							},
+							DefaultMode: ptr.To(int32(0o755)),
+						},
+					},
+				}},
 			InitContainers: initContainersFor(pg, role, env),
 			Containers: []corev1.Container{{
 				Name:  "postgres",
@@ -105,10 +119,17 @@ func InstancePod(pg *dbv1alpha1.PostgresCluster, idx int, role string) *corev1.P
 					},
 				},
 				Env: env,
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "data",
-					MountPath: "/var/lib/postgresql/data",
-				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "data",
+						MountPath: "/var/lib/postgresql/data",
+					},
+					{
+						Name:      "init-scripts",
+						MountPath: "/docker-entrypoint-initdb.d",
+						ReadOnly:  true,
+					},
+				},
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
 						Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-U", "postgres"}},
@@ -117,6 +138,31 @@ func InstancePod(pg *dbv1alpha1.PostgresCluster, idx int, role string) *corev1.P
 					PeriodSeconds:       5,
 				},
 			}},
+		},
+	}
+}
+
+func BootstrapConfigMap(pg *dbv1alpha1.PostgresCluster) *corev1.ConfigMap {
+	names := make([]string, 0, pg.Spec.Replicas)
+
+	for i := 1; i <= int(pg.Spec.Replicas); i++ {
+		// names might contain -
+		names = append(names, fmt.Sprintf(`\"%s\"`, podName(pg, i)))
+	}
+
+	syncRepScript := fmt.Sprintf(
+		`echo "synchronous_standby_names = 'ANY 1 (%s)'" >> "$PGDATA/postgresql.auto.conf"`, strings.Join(names, ", "),
+	)
+
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName(pg),
+			Namespace: pg.Namespace,
+			Labels:    labelsForPg(pg),
+		},
+		Data: map[string]string{
+			"00-replication-hba.sh": `echo "host replication all all trust" >> "$PGDATA/pg_hba.conf"`,
+			"01-sync-rep.sh":        syncRepScript,
 		},
 	}
 }
@@ -135,7 +181,8 @@ func initContainersFor(pg *dbv1alpha1.PostgresCluster, role string, env []corev1
     sleep 2
 	done
 	if [ ! -s "$PGDATA/PG_VERSION" ]; then
-    pg_basebackup -h %s -D "$PGDATA" -U postgres -X stream -R -P
+	pg_basebackup -d "host=%s user=postgres application_name=$HOSTNAME" \
+	-D "$PGDATA" -X stream -R -P
 	fi
 	`, primaryHost, primaryHost)
 
@@ -182,4 +229,8 @@ func pvcName(pg *dbv1alpha1.PostgresCluster, idx int, prefix string) string {
 
 func hostName(pg *dbv1alpha1.PostgresCluster, idx int) string {
 	return fmt.Sprintf("%s.%s", podName(pg, idx), serviceName(pg))
+}
+
+func configMapName(pg *dbv1alpha1.PostgresCluster) string {
+	return fmt.Sprintf("%s-init-scripts", pg.Name)
 }
